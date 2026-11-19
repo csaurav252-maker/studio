@@ -25,6 +25,17 @@ script = st.text_area(
 )
 images = st.file_uploader("Images (optional - nasatil tar AI aapoaap images banvel)",
                           type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
+# Images cha kram app madhech thara (file che nav badlaychi garaj nahi)
+order = {}
+if images:
+    st.write("**Images cha kram thara** (1 = pahili scenes, 2 = pudhchya scenes ...)")
+    cols = st.columns(min(4, len(images)))
+    for i, f in enumerate(images):
+        with cols[i % len(cols)]:
+            st.image(f, use_container_width=True)
+            order[i] = st.number_input("Kram", min_value=1, max_value=len(images),
+                                       value=i + 1, step=1, key=f"ord_{i}_{f.name}")
+
 music = st.file_uploader("Background music (optional)", type=["mp3", "wav", "m4a"])
 
 col1, col2 = st.columns(2)
@@ -43,8 +54,10 @@ if st.button("Video banva", type="primary"):
     tmp = Path(tempfile.mkdtemp())
     (tmp / "images").mkdir()
     (tmp / "script.txt").write_text(script, encoding="utf-8")
-    for f in sorted(images, key=lambda x: x.name):
-        (tmp / "images" / f.name).write_bytes(f.getvalue())
+    ranked = sorted(range(len(images)), key=lambda i: (order.get(i, i + 1), i))
+    for rank, i in enumerate(ranked, start=1):
+        f = images[i]
+        (tmp / "images" / f"{rank:03d}{Path(f.name).suffix.lower()}").write_bytes(f.getvalue())
     if music:
         (tmp / f"music{Path(music.name).suffix}").write_bytes(music.getvalue())
     box = st.empty()
@@ -65,3 +78,8 @@ if st.button("Video banva", type="primary"):
         st.error(str(e))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+    problems = [l for l in lines if l.startswith("!")]
+    if problems:
+        st.warning("Kahi goshti chalalya nahit:\n\n" + "\n\n".join(problems[:6]))
+    with st.expander("Purna log (kahi problem asel tar ha mala paste kara)"):
+        st.code("\n".join(lines))
