@@ -75,6 +75,8 @@ def parse_scene(raw):
 
 
 LAST_ERROR = [""]
+GEMINI_GAP = 15        # sekand: free quota la sambhalnyasathi
+_last_gemini = [0.0]
 
 
 def _gemini_extract(resp):
@@ -105,7 +107,11 @@ def gemini_image(prompt, out):
         "generationConfig": {"responseModalities": ["IMAGE"]},
     }).encode()
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-    for attempt in range(3):
+    for attempt in range(4):
+        wait = GEMINI_GAP - (time.time() - _last_gemini[0])
+        if wait > 0:
+            time.sleep(wait)
+        _last_gemini[0] = time.time()
         try:
             req = urllib.request.Request(url, data=body, headers={
                 "Content-Type": "application/json", "x-goog-api-key": key})
@@ -118,8 +124,8 @@ def gemini_image(prompt, out):
             return False
         except urllib.error.HTTPError as e:
             LAST_ERROR[0] = f"Gemini HTTP {e.code}: " + e.read().decode("utf-8", "ignore")[:200]
-            if e.code == 429 and attempt < 2:
-                time.sleep(25)
+            if e.code == 429 and attempt < 3:
+                time.sleep(45)
                 continue
             return False
         except Exception as e:
