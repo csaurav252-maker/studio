@@ -57,7 +57,7 @@ def read_scenes(script_path):
     return [s for s in scenes if s]
 
 
-IMG_STYLE = "2D flat illustration, documentary animation style, vibrant colors, cinematic, no text, "
+IMG_STYLE = "traditional Indian miniature painting style, Pahari and Rajput art, rich jewel colors, gold details, flat perspective, ornate border, no text, "
 
 
 def parse_scene(raw):
