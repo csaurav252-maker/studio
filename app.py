@@ -1,3 +1,4 @@
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -5,6 +6,13 @@ from pathlib import Path
 import streamlit as st
 
 import video_maker as vm
+
+try:
+    for _k in ("GEMINI_API_KEY", "GEMINI_IMAGE_MODEL", "POLLINATIONS_KEY"):
+        if _k in st.secrets:
+            os.environ[_k] = st.secrets[_k]
+except Exception:
+    pass
 
 st.set_page_config(page_title="Documentary Video Maker", page_icon="🎬")
 st.title("🎬 Documentary Video Maker")
