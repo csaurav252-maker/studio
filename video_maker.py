@@ -18,11 +18,17 @@ Vapar:
   python video_maker.py my_project      -> CLI (my_project/ folder madhe script.txt pahije)
 """
 import asyncio
+import base64
+import io
+import json
 import math
+import os
+import time
 import re
 import shutil
 import subprocess
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -68,14 +74,79 @@ def parse_scene(raw):
     return text, prompt
 
 
+LAST_ERROR = [""]
+
+
+def _gemini_extract(resp):
+    """Gemini JSON response madhun image bytes kadhto."""
+    for cand in resp.get("candidates", []):
+        for part in cand.get("content", {}).get("parts", []):
+            d = part.get("inlineData") or part.get("inline_data")
+            if d and d.get("data"):
+                return base64.b64decode(d["data"])
+    return None
+
+
+def _fit(data, out):
+    """Image la W x H madhe crop karun save karto."""
+    from PIL import Image, ImageOps
+    img = Image.open(io.BytesIO(data)).convert("RGB")
+    ImageOps.fit(img, (W, H), Image.LANCZOS).save(out)
+
+
+def gemini_image(prompt, out):
+    key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not key:
+        return False
+    model = os.environ.get("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
+    orient = "vertical 9:16 portrait" if H > W else "horizontal 16:9 landscape"
+    body = json.dumps({
+        "contents": [{"parts": [{"text": f"{IMG_STYLE}{prompt}. {orient} composition."}]}],
+        "generationConfig": {"responseModalities": ["IMAGE"]},
+    }).encode()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, data=body, headers={
+                "Content-Type": "application/json", "x-goog-api-key": key})
+            resp = json.loads(urllib.request.urlopen(req, timeout=120).read())
+            data = _gemini_extract(resp)
+            if data:
+                _fit(data, out)
+                return True
+            LAST_ERROR[0] = "Gemini ne image dili nahi: " + json.dumps(resp)[:200]
+            return False
+        except urllib.error.HTTPError as e:
+            LAST_ERROR[0] = f"Gemini HTTP {e.code}: " + e.read().decode("utf-8", "ignore")[:200]
+            if e.code == 429 and attempt < 2:
+                time.sleep(25)
+                continue
+            return False
+        except Exception as e:
+            LAST_ERROR[0] = f"Gemini error: {e}"
+            return False
+    return False
+
+
+FETCH_GAP = 16          # free service: ~1 image per 15 sec
+_last_fetch = [0.0]
+
+
 def fetch_image(prompt, out, seed):
-    """Free AI image (pollinations.ai, key nako). Fail zala tar False."""
+    """Free AI image (pollinations.ai). Optional key: env POLLINATIONS_KEY."""
     url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(IMG_STYLE + prompt)
            + f"?width={W}&height={H}&nologo=true&seed={seed}")
-    for _ in range(2):
+    headers = {"User-Agent": "Mozilla/5.0"}
+    key = os.environ.get("POLLINATIONS_KEY", "").strip()
+    if key:
+        headers["Authorization"] = "Bearer " + key
+    for _ in range(3):
+        wait = FETCH_GAP - (time.time() - _last_fetch[0])
+        if wait > 0:
+            time.sleep(wait)
+        _last_fetch[0] = time.time()
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            data = urllib.request.urlopen(req, timeout=60).read()
+            data = urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=90).read()
             if len(data) > 5000:
                 Path(out).write_bytes(data)
                 return True
@@ -184,7 +255,9 @@ def build(project, voice=DEFAULT_VOICE, rate="+0%", use_tts=True, log=print):
             img = imgs[min(i, len(imgs) - 1)] if len(imgs) < len(scenes) else imgs[i]
         else:
             img = work / f"ph{i:03d}.png"
-            if not (prompt and fetch_image(prompt, img, i)):
+            ok = bool(prompt) and (gemini_image(prompt, img) or fetch_image(prompt, img, i))
+            if not ok:
+                log(f"! Scene {i + 1}: AI image milali nahi. {LAST_ERROR[0]}")
                 placeholder_image(text, img)
         ass = work / f"s{i:03d}.ass"
         make_subs(text, dur, ass, 4 if H > W else 7)
