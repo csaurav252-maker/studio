@@ -134,6 +134,45 @@ def gemini_image(prompt, out):
     return False
 
 
+def gemini_text(prompt):
+    """Gemini text model (free tier). JSON string parat deto."""
+    key = os.environ.get("GEMINI_API_KEY", "").strip()
+    model = os.environ.get("GEMINI_TEXT_MODEL", "gemini-2.5-flash")
+    body = json.dumps({
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"responseMimeType": "application/json"},
+    }).encode()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, data=body, headers={
+                "Content-Type": "application/json", "x-goog-api-key": key})
+            resp = json.loads(urllib.request.urlopen(req, timeout=90).read())
+            return resp["candidates"][0]["content"]["parts"][0]["text"]
+        except urllib.error.HTTPError as e:
+            LAST_ERROR[0] = f"Gemini text HTTP {e.code}: " + e.read().decode("utf-8", "ignore")[:200]
+            if e.code == 429 and attempt < 2:
+                time.sleep(30)
+                continue
+            raise RuntimeError(LAST_ERROR[0])
+
+
+def auto_prompts(texts, k):
+    """Script chya scenes varun k English image prompts banvto."""
+    joined = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
+    q = (f"You write image prompts for a short vertical documentary video. Below are {len(texts)} "
+         f"narration scenes (any language) in story order. Write exactly {k} English image prompts, "
+         f"each illustrating a consecutive part of the story, in order. Each prompt: 12-25 words, one clear "
+         f"scene with one or two main subjects, concrete visual details, keep character descriptions "
+         f"consistent across prompts, no text or letters in the image. Return only a JSON array of {k} strings."
+         f"\n\nScenes:\n{joined}")
+    arr = json.loads(gemini_text(q))
+    arr = [str(x).strip() for x in arr if str(x).strip()]
+    if not arr:
+        raise RuntimeError("Gemini ne prompts dile nahit")
+    return arr
+
+
 FETCH_GAP = 16          # free service: ~1 image per 15 sec
 _last_fetch = [0.0]
 
@@ -250,21 +289,36 @@ def build(project, voice=DEFAULT_VOICE, rate="+0%", use_tts=True, log=print):
                    if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp")]) if (project / "images").exists() else []
     scenes = read_scenes(script)
     log(f"{len(scenes)} scenes, {len(imgs)} images")
+    auto = []
+    if not imgs and os.environ.get("GEMINI_API_KEY") and not any(parse_scene(r)[1] for r in scenes):
+        log("Script varun image prompts banvto ...")
+        k = min(len(scenes), max(3, math.ceil(len(scenes) / 2)))
+        try:
+            auto = auto_prompts([parse_scene(r)[0] for r in scenes], k)
+        except Exception as e:
+            log(f"! Auto prompts banle nahit: {e}")
     clips = []
+    last_img = None
     for i, raw in enumerate(scenes):
         text, prompt = parse_scene(raw)
+        if auto:
+            g = i * len(auto) // len(scenes)
+            prompt = auto[g] if (i == 0 or g != (i - 1) * len(auto) // len(scenes)) else ""
         log(f"Scene {i + 1}/{len(scenes)} ...")
         audio = work / f"a{i:03d}.mp3"
         make_voice(text, audio, voice, rate, use_tts)
         dur = audio_duration(audio)
         if imgs:
-            img = imgs[min(i, len(imgs) - 1)] if len(imgs) < len(scenes) else imgs[i]
+            img = imgs[min(i * len(imgs) // len(scenes), len(imgs) - 1)]
+        elif not prompt and last_img:
+            img = last_img
         else:
             img = work / f"ph{i:03d}.png"
             ok = bool(prompt) and (gemini_image(prompt, img) or fetch_image(prompt, img, i))
             if not ok:
                 log(f"! Scene {i + 1}: AI image milali nahi. {LAST_ERROR[0]}")
                 placeholder_image(text, img)
+            last_img = img
         ass = work / f"s{i:03d}.ass"
         make_subs(text, dur, ass, 4 if H > W else 7)
         clip = work / f"c{i:03d}.mp4"
