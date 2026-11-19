@@ -100,7 +100,7 @@ def gemini_image(prompt, out):
     key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not key:
         return False
-    model = os.environ.get("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
+    model = pick_model("image")
     orient = "vertical 9:16 portrait" if H > W else "horizontal 16:9 landscape"
     body = json.dumps({
         "contents": [{"parts": [{"text": f"{IMG_STYLE}{prompt}. {orient} composition."}]}],
@@ -134,10 +134,55 @@ def gemini_image(prompt, out):
     return False
 
 
+_MODELS = []
+
+
+def list_models():
+    """Tumchya key la uplabdh Gemini models (generateContent) shodhto."""
+    if _MODELS:
+        return _MODELS
+    key = os.environ.get("GEMINI_API_KEY", "").strip()
+    try:
+        req = urllib.request.Request(
+            "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200",
+            headers={"x-goog-api-key": key})
+        data = json.loads(urllib.request.urlopen(req, timeout=30).read())
+        for m in data.get("models", []):
+            if "generateContent" in m.get("supportedGenerationMethods", []):
+                _MODELS.append(m["name"].replace("models/", ""))
+    except Exception as e:
+        print("! model list milali nahi:", e)
+    return _MODELS
+
+
+def _rank(name):
+    v = re.search(r"gemini-(\d+(?:\.\d+)*)", name)
+    ver = tuple(int(x) for x in v.group(1).split(".")) if v else (0,)
+    return (ver, "preview" not in name and "exp" not in name, "lite" not in name)
+
+
+_BAD = ("tts", "live", "audio", "embedding", "robotics", "computer", "thinking", "native")
+
+
+def pick_model(kind):
+    """kind = 'text' kiva 'image'. Env var asel tar toch vaparto."""
+    env = os.environ.get("GEMINI_TEXT_MODEL" if kind == "text" else "GEMINI_IMAGE_MODEL", "").strip()
+    if env:
+        return env
+    names = [n for n in list_models() if n.startswith("gemini") and not any(b in n for b in _BAD)]
+    if kind == "image":
+        names = [n for n in names if "image" in n]
+        default = "gemini-2.5-flash-image"
+    else:
+        names = [n for n in names if "flash" in n and "image" not in n]
+        default = "gemini-2.5-flash"
+    return max(names, key=_rank) if names else default
+
+
 def gemini_text(prompt):
     """Gemini text model (free tier). JSON string parat deto."""
     key = os.environ.get("GEMINI_API_KEY", "").strip()
-    model = os.environ.get("GEMINI_TEXT_MODEL", "gemini-2.5-flash")
+    model = pick_model("text")
     body = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"responseMimeType": "application/json"},
@@ -289,6 +334,8 @@ def build(project, voice=DEFAULT_VOICE, rate="+0%", use_tts=True, log=print):
                    if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp")]) if (project / "images").exists() else []
     scenes = read_scenes(script)
     log(f"{len(scenes)} scenes, {len(imgs)} images")
+    if os.environ.get("GEMINI_API_KEY"):
+        log(f"Gemini models: text={pick_model('text')}, image={pick_model('image')}")
     auto = []
     if not imgs and os.environ.get("GEMINI_API_KEY") and not any(parse_scene(r)[1] for r in scenes):
         log("Script varun image prompts banvto ...")
